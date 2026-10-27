@@ -122,3 +122,48 @@ RETRY_SCHEMA = {
     "required": ["specific", "relevance", "structure", "evidence", "weak"],
     "additionalProperties": False,
 }
+
+
+# ───────── STEP 5 PO 케이스 면접 (설계초안 9장, 10/27 확정) ─────────
+# 면접관은 INTERVIEWER 를 그대로 쓰고 {question} · {point} 만 케이스용으로
+CASE_QUESTION = """아래 VOC 5줄(지난주, 가상)을 보고 무엇부터 고칠래요?
+{voc}"""
+
+CASE_POINT = "우선순위 기준을 먼저 말하는가(빈도 · 심각도 · 영향 범위) · 1순위의 근거 · 성공을 확인할 지표 · 이번에 하지 않을 것"
+
+# ⑯ 심사숙고 · 반론 먼저
+CASE_EVAL = """너는 PO 케이스 면접 평가자야. 판단이 성급하지 않게 아래 단계를 순서대로 밟고, 단계마다 중간 결론을 1문장으로 써.
+{context}
+[VOC]
+{voc}
+[단계]
+1. VOC 정리: 5줄을 문제별로 묶고, 문제마다 영향(건수 · 돈 · 신뢰 · 이탈)을 VOC에 있는 것만으로 적어. 없는 숫자는 [가정].
+2. 기준 확인: 지원자가 우선순위를 정한 기준이 무엇인지. 기준을 말하지 않았으면 "기준 없음".
+3. 선택 검토: 먼저 지원자의 1순위가 틀릴 수 있는 이유 1문장(반론 먼저), 그다음 맞는 이유 1문장.
+4. 빠진 것: 성공을 확인할 지표와 이번에 하지 않을 것을 말했는지.
+5. 기준 4개(문제 정의 / 우선순위 근거 / 지표 · 검증 / 범위 · 소통)를 각각 0~5점. 가장 약한 점 하나를 weak 에.
+6. better: 같은 VOC로 더 좋은 답 4문장 이내. 지원자가 쓰지 않은 경험은 넣지 마.
+출력은 JSON 하나만. 점수 합계는 쓰지 마 (앱이 계산해)."""
+
+CASE_EVAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"step": {"type": "integer"}, "conclusion": {"type": "string"}},
+                "required": ["step", "conclusion"],
+                "additionalProperties": False,
+            },
+        },
+        "problem": {"type": "integer"},
+        "priority": {"type": "integer"},
+        "metric": {"type": "integer"},
+        "scope": {"type": "integer"},
+        "weak": {"type": "string"},
+        "better": {"type": "string"},
+    },
+    "required": ["steps", "problem", "priority", "metric", "scope", "weak", "better"],
+    "additionalProperties": False,
+}

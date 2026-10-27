@@ -143,3 +143,36 @@ def compare(before, after):
     """전 · 후 합계와 차이, 기준별 전/후."""
     rows = [{"기준": name, "전": before[k], "후": after[k], "차이": after[k] - before[k]} for k, name in CRITERIA]
     return {"before": before["total"], "after": after["total"], "diff": after["total"] - before["total"], "rows": rows}
+
+
+# ───────── PO 케이스 면접 (STEP 5) ─────────
+CASE_JOB = "PO"
+CASE_STEPS = 6
+CASE_CRITERIA = [("problem", "문제 정의"), ("priority", "우선순위 근거"), ("metric", "지표 · 검증"), ("scope", "범위 · 소통")]
+
+
+def load_voc(path):
+    return pd.read_csv(path, encoding="utf-8-sig")
+
+
+def voc_text(voc):
+    return "\n".join(f"{r['번호']}. {r['VOC']} (지난주 {r['지난주 건수']}건)" for _, r in voc.iterrows())
+
+
+def normalize_case(raw):
+    """케이스 평가 정리: 점수 자르기 · 합계 다시 계산 · 빠진 단계 찾기."""
+    scores = {k: clamp(raw[k], 0, 5) for k, _ in CASE_CRITERIA}
+    steps = {}
+    for s in raw["steps"]:
+        n = clamp(s["step"], 1, CASE_STEPS)
+        steps.setdefault(n, s["conclusion"])
+    total = sum(scores.values())
+    return {
+        **scores,
+        "total": total,
+        "show_better": needs_rewrite(total),
+        "steps": [(n, steps[n]) for n in sorted(steps)],
+        "missing_steps": [n for n in range(1, CASE_STEPS + 1) if n not in steps],
+        "weak": raw["weak"],
+        "better": raw["better"],
+    }

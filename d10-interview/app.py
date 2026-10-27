@@ -21,7 +21,7 @@ EXAMPLE = {  # data/PO_예시답변.md 의 가상 지원자 (공개용)
                     "무엇을 왜 만들지 정하는 일의 중요성을 알게 되어 PO로 전환하려 함.",
 }
 STATE_KEYS = ["profile", "questions", "q_index", "follow_ups_used", "messages", "transcript", "understanding", "finished",
-              "evaluation", "retries"]
+              "evaluation", "retries", "case", "case_eval"]
 
 st.set_page_config(page_title="AI 면접 코치", page_icon="🎤")
 ss = st.session_state
@@ -147,6 +147,105 @@ def rescore(api_key, no, answer):
     ss.setdefault("retries", []).append({"no": no, "answer": answer, "after": after, "result": coach.compare(before, after)})
 
 
+def context_block():
+    p = ss.profile
+    return prompts.CONTEXT.format(company=p["company"], job=p["job"], experience=p["experience"])
+
+
+def start_case():
+    voc = coach.load_voc(HERE / "data" / "case_voc.csv")
+    ss.case = {"voc": voc, "voc_text": coach.voc_text(voc), "used": 0, "done": False,
+               "turns": [{"kind": "question", "text": "무엇부터 고칠래요?"}],
+               "messages": [{"role": "assistant", "content": "위 VOC 5줄(지난주, 가상)을 보고 **무엇부터 고칠래요?** 이유도 같이 말해 주세요."}]}
+
+
+def handle_case_answer(api_key, answer):
+    case = ss.case
+    case["turns"].append({"kind": "answer", "text": answer})
+    instructions = prompts.INTERVIEWER.format(
+        persona=prompts.PERSONAS[coach.CASE_JOB], context=context_block(),
+        question=prompts.CASE_QUESTION.format(voc=case["voc_text"]), point=prompts.CASE_POINT)
+    try:
+        r = ask_json(api_key, instructions, coach.dialogue_text(case["turns"]), prompts.INTERVIEWER_SCHEMA, "interviewer")
+    except RuntimeError:
+        case["turns"].pop()
+        raise
+    case["messages"].append({"role": "user", "content": answer})
+    reaction, asked = r["reaction"].strip(), r["question"].strip()
+    step = coach.next_step(r["follow_up"], r["clarify"], case["used"])
+    if step == "clarify":
+        asked = asked or "무엇부터 고칠래요?"
+        case["turns"].append({"kind": "clarify", "text": asked})
+        text = "\n\n".join(x for x in [reaction, asked] if x)
+    elif step == "follow_up" and asked:
+        case["used"] += 1
+        case["turns"].append({"kind": "follow_up", "text": asked})
+        text = "\n\n".join(x for x in [reaction, "↪ " + asked] if x)
+    else:
+        case["done"] = True
+        text = "\n\n".join(x for x in [reaction, "케이스 면접은 여기까지예요. 아래에서 단계별 평가를 받아 보세요."] if x)
+    case["messages"].append({"role": "assistant", "content": text})
+
+
+def evaluate_case(api_key):
+    case = ss.case
+    raw = ask_json(api_key, prompts.CASE_EVAL.format(context=context_block(), voc=case["voc_text"]),
+                   coach.dialogue_text(case["turns"]), prompts.CASE_EVAL_SCHEMA, "case_eval")
+    ss.case_eval = coach.normalize_case(raw)
+
+
+def show_case_eval(ev):
+    st.metric("케이스 점수", f"{ev['total']} / 20")
+    st.markdown("**단계별 판단 (⑯)**")
+    st.markdown("\n".join(f"{n}. {c}" for n, c in ev["steps"]))
+    if ev["missing_steps"]:
+        st.warning(f"평가가 단계 {', '.join(map(str, ev['missing_steps']))}를 건너뛰었어요. 다시 평가받아 보세요.")
+    st.table({name: [f"{ev[k]}/5"] for k, name in coach.CASE_CRITERIA})
+    st.markdown(f"**가장 약한 점** {ev['weak']}")
+    if ev["show_better"]:
+        st.markdown("**더 좋은 답**")
+        st.info(ev["better"])
+    else:
+        st.caption(f"{coach.REWRITE_UNDER}점 이상이라 더 좋은 답은 생략했어요.")
+
+
+def show_case(api_key):
+    if "case" not in ss:
+        start_case()
+    case = ss.case
+    st.table(case["voc"].set_index("번호"))
+    for m in case["messages"]:
+        with st.chat_message(m["role"], avatar="🧑‍💼" if m["role"] == "assistant" else None):
+            st.markdown(m["content"])
+    if not case["done"]:
+        answer = st.chat_input("케이스 답을 입력하세요", key="case_input")
+        if answer:
+            if not api_key.strip():
+                st.warning("사이드바에 OpenAI 키를 넣고 다시 보내 주세요.")
+                st.caption(f"보낸 답: {answer}")
+            else:
+                try:
+                    with st.spinner("면접관이 듣고 있어요…"):
+                        handle_case_answer(api_key.strip(), answer)
+                    st.rerun()
+                except RuntimeError as e:
+                    st.error(str(e))
+                    st.caption(f"보낸 답: {answer}")
+        return
+    label = "다시 평가받기" if ss.get("case_eval") else "케이스 평가받기"
+    if st.button(label, type="primary", key="case_eval_btn"):
+        if not api_key.strip():
+            st.warning("사이드바에 OpenAI 키를 넣고 다시 눌러 주세요.")
+        else:
+            try:
+                with st.spinner("단계별로 따져 보고 있어요…"):
+                    evaluate_case(api_key.strip())
+            except RuntimeError as e:
+                st.error(str(e))
+    if ss.get("case_eval"):
+        show_case_eval(ss.case_eval)
+
+
 def show_compare(r):
     c = r["result"]
     c1, c2 = st.columns(2)
@@ -234,7 +333,9 @@ if "profile" not in ss:
 
 # ───────── 면접 · 평가 탭 ─────────
 st.title("🎤 모의면접")
-tab_interview, tab_eval, tab_retry = st.tabs(["🎤 면접", "📊 평가", "🔁 재도전"])
+has_case = ss.profile["job"] == coach.CASE_JOB
+tabs = st.tabs(["🎤 면접", "📊 평가", "🔁 재도전"] + (["🧩 케이스"] if has_case else []))
+tab_interview, tab_eval, tab_retry = tabs[:3]
 
 with tab_interview:
     for m in ss.messages:
@@ -280,3 +381,10 @@ with tab_retry:
         st.info("📊 평가를 먼저 받으면, 점수 낮은 답부터 다시 답해 볼 수 있어요.")
     else:
         show_retry(api_key)
+
+if has_case:
+    with tabs[3]:
+        if not ss.finished:
+            st.info(f"면접 {coach.TOTAL_QUESTIONS}문제를 마치면 PO 케이스 면접이 열려요.")
+        else:
+            show_case(api_key)
