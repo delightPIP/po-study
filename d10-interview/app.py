@@ -20,7 +20,8 @@ EXAMPLE = {  # data/PO_예시답변.md 의 가상 지원자 (공개용)
     "f_experience": "온라인 교육 회사(가상)에서 웹 개발을 3년 했음. 요청받은 대로 만든 수강 후기 기능이 출시 후 거의 쓰이지 않는 것을 보고, "
                     "무엇을 왜 만들지 정하는 일의 중요성을 알게 되어 PO로 전환하려 함.",
 }
-STATE_KEYS = ["profile", "questions", "q_index", "follow_ups_used", "messages", "transcript", "understanding", "finished"]
+STATE_KEYS = ["profile", "questions", "q_index", "follow_ups_used", "messages", "transcript", "understanding", "finished",
+              "evaluation"]
 
 st.set_page_config(page_title="AI 면접 코치", page_icon="🎤")
 ss = st.session_state
@@ -91,6 +92,50 @@ def handle_answer(api_key, answer):
             say("\n\n".join(x for x in [reaction, "면접은 여기까지예요. 수고하셨어요."] if x))
 
 
+def evaluate(api_key):
+    p = ss.profile
+    context = prompts.CONTEXT.format(company=p["company"], job=p["job"], experience=p["experience"])
+    raw = ask_json(api_key, prompts.EVALUATOR.format(context=context), coach.transcript_text(ss.transcript),
+                   prompts.EVAL_SCHEMA, "evaluation")
+    ss.evaluation = coach.normalize_eval(raw, len(ss.transcript))
+
+
+def show_evaluation(ev):
+    c1, c2 = st.columns(2)
+    c1.metric("위원회 평균", f"{ev['panel_average']} / 10")
+    c2.metric("답변 평균", f"{ev['answer_average']} / 20")
+    st.caption("평균과 합계는 앱이 직접 계산했어요 (AI가 쓴 합계는 쓰지 않아요).")
+
+    st.subheader("위원 4명")
+    for m in ev["panel"]:
+        with st.container(border=True):
+            st.markdown(f"**{m['role']}** · {m['score']}/10")
+            st.markdown(f"🙅 뽑지 말아야 할 이유: {m['against']}")
+            st.markdown(f"👍 좋은 점: {m['good']}")
+    st.markdown(f"**⚖️ 갈린 곳** {ev['conflict']}")
+    st.markdown(f"**🤝 같은 판단** {ev['agree']}")
+
+    st.subheader("답변별 점수")
+    for i, (item, a) in enumerate(zip(ss.transcript, ev["answers"]), 1):
+        title = f"질문 {i} · {item['question']}"
+        if a is None:
+            st.expander(f"{title} — 평가 없음").write("위원회가 이 답을 평가하지 않았어요. 다시 평가해 보세요.")
+            continue
+        with st.expander(f"{title} — {a['total']}/20", expanded=a["show_rewrite"]):
+            st.table({name: [f"{a[k]}/5"] for k, name in coach.CRITERIA})
+            st.markdown(f"**가장 약한 점** {a['weak']}")
+            if a["show_rewrite"]:
+                st.markdown("**고친 답**")
+                st.info(a["rewrite"])
+                if a["check"]:
+                    st.markdown("**사람이 확인할 사실**\n" + "\n".join(f"- {c}" for c in a["check"]))
+            else:
+                st.caption(f"{coach.REWRITE_UNDER}점 이상이라 고친 답은 생략했어요.")
+
+    st.subheader("다음 연습에서 고칠 것")
+    st.markdown("\n".join(f"{n}. {t}" for n, t in enumerate(ev["next"], 1)))
+
+
 # ───────── 사이드바: 키 · 상태창 ─────────
 with st.sidebar:
     st.header("🎤 AI 면접 코치")
@@ -129,25 +174,45 @@ if "profile" not in ss:
             st.rerun()
     st.stop()
 
-# ───────── 면접 화면 ─────────
-st.title("🎤 면접")
-for m in ss.messages:
-    with st.chat_message(m["role"], avatar="🧑‍💼" if m["role"] == "assistant" else None):
-        st.markdown(m["content"])
+# ───────── 면접 · 평가 탭 ─────────
+st.title("🎤 모의면접")
+tab_interview, tab_eval = st.tabs(["🎤 면접", "📊 평가"])
 
-if ss.finished:
-    st.success("면접이 끝났어요. 📊 평가는 다음 단계에서 열려요.")
-else:
-    answer = st.chat_input("답을 입력하세요")
-    if answer:
-        if not api_key.strip():
-            st.warning("사이드바에 OpenAI 키를 넣고 다시 보내 주세요.")
-            st.caption(f"보낸 답: {answer}")
-        else:
-            try:
-                with st.spinner("면접관이 듣고 있어요…"):
-                    handle_answer(api_key.strip(), answer)
-                st.rerun()
-            except RuntimeError as e:
-                st.error(str(e))
+with tab_interview:
+    for m in ss.messages:
+        with st.chat_message(m["role"], avatar="🧑‍💼" if m["role"] == "assistant" else None):
+            st.markdown(m["content"])
+
+    if ss.finished:
+        st.success("면접이 끝났어요. 📊 평가 탭에서 결과를 받아 보세요.")
+    else:
+        answer = st.chat_input("답을 입력하세요")
+        if answer:
+            if not api_key.strip():
+                st.warning("사이드바에 OpenAI 키를 넣고 다시 보내 주세요.")
                 st.caption(f"보낸 답: {answer}")
+            else:
+                try:
+                    with st.spinner("면접관이 듣고 있어요…"):
+                        handle_answer(api_key.strip(), answer)
+                    st.rerun()
+                except RuntimeError as e:
+                    st.error(str(e))
+                    st.caption(f"보낸 답: {answer}")
+
+with tab_eval:
+    if not ss.finished:
+        st.info(f"면접 {coach.TOTAL_QUESTIONS}문제를 모두 마치면 평가할 수 있어요. (지금 질문 {ss.q_index + 1}/{coach.TOTAL_QUESTIONS})")
+    else:
+        label = "다시 평가받기" if ss.get("evaluation") else "평가받기"
+        if st.button(label, type="primary"):
+            if not api_key.strip():
+                st.warning("사이드바에 OpenAI 키를 넣고 다시 눌러 주세요.")
+            else:
+                try:
+                    with st.spinner("위원 4명이 기록을 보고 있어요…"):
+                        evaluate(api_key.strip())
+                except RuntimeError as e:
+                    st.error(str(e))
+        if ss.get("evaluation"):
+            show_evaluation(ss.evaluation)

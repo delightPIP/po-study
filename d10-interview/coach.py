@@ -62,3 +62,56 @@ def dialogue_text(turns):
     """이번 질문에서 오간 대화를 순서대로 (INTERVIEWER 의 [입력])."""
     names = {"question": "질문", "follow_up": "꼬리 질문", "clarify": "다시 묻기", "answer": "지원자 답"}
     return "\n".join(f"{names[t['kind']]}: {t['text']}" for t in turns)
+
+
+# ───────── 평가 (STEP 3) ─────────
+CRITERIA = [("specific", "구체성"), ("relevance", "직무 연관"), ("structure", "구조"), ("evidence", "근거 · 검증")]
+REWRITE_UNDER = 14  # 답 합계(0~20)가 이 점수 미만이면 고친 답을 보여 줌
+
+
+def transcript_text(transcript):
+    """평가 위원회에 넘길 면접 기록 전체."""
+    blocks = []
+    for i, item in enumerate(transcript, 1):
+        blocks.append(f"[답변 {i}] ({item['type']}) {item['question']}\n보는 점: {item['point']}\n{dialogue_text(item['turns'])}")
+    return "\n\n".join(blocks)
+
+
+def panel_average(panel):
+    """위원 점수(0~10) 평균, 소수 1자리."""
+    if not panel:
+        return 0.0
+    return round(sum(clamp(m["score"], 0, 10) for m in panel) / len(panel), 1)
+
+
+def answer_total(a):
+    """기준 4개(각 0~5) 합 0~20."""
+    return sum(clamp(a[k], 0, 5) for k, _ in CRITERIA)
+
+
+def needs_rewrite(total):
+    return total < REWRITE_UNDER
+
+
+def normalize_eval(raw, count):
+    """AI가 준 평가를 코드 기준으로 정리: 점수 자르기 · 합계 다시 계산 · 답변 번호 맞추기."""
+    panel = [{**m, "score": clamp(m["score"], 0, 10)} for m in raw["panel"]]
+    by_no = {}
+    for a in raw["answers"]:
+        no = clamp(a["no"], 1, count)
+        if no not in by_no:
+            fixed = {**a, "no": no, **{k: clamp(a[k], 0, 5) for k, _ in CRITERIA}}
+            fixed["total"] = answer_total(fixed)
+            fixed["show_rewrite"] = needs_rewrite(fixed["total"])
+            by_no[no] = fixed
+    answers = [by_no.get(n) for n in range(1, count + 1)]  # 빠진 답은 None
+    totals = [a["total"] for a in answers if a]
+    return {
+        "panel": panel,
+        "panel_average": panel_average(panel),
+        "conflict": raw["conflict"],
+        "agree": raw["agree"],
+        "answers": answers,
+        "answer_average": round(sum(totals) / len(totals), 1) if totals else 0.0,
+        "next": raw["next"][:3],
+    }
