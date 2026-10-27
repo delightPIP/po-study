@@ -2,3 +2,4 @@
 __pycache__/
 .streamlit/secrets.toml
 my_examples.py
+*.local.md
