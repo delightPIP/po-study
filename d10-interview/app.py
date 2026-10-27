@@ -21,7 +21,7 @@ EXAMPLE = {  # data/PO_예시답변.md 의 가상 지원자 (공개용)
                     "무엇을 왜 만들지 정하는 일의 중요성을 알게 되어 PO로 전환하려 함.",
 }
 STATE_KEYS = ["profile", "questions", "q_index", "follow_ups_used", "messages", "transcript", "understanding", "finished",
-              "evaluation"]
+              "evaluation", "retries"]
 
 st.set_page_config(page_title="AI 면접 코치", page_icon="🎤")
 ss = st.session_state
@@ -136,6 +136,64 @@ def show_evaluation(ev):
     st.markdown("\n".join(f"{n}. {t}" for n, t in enumerate(ev["next"], 1)))
 
 
+def rescore(api_key, no, answer):
+    p = ss.profile
+    item = ss.transcript[no - 1]
+    context = prompts.CONTEXT.format(company=p["company"], job=p["job"], experience=p["experience"])
+    raw = ask_json(api_key, prompts.RETRY.format(context=context), coach.retry_input(item, answer),
+                   prompts.RETRY_SCHEMA, "retry")
+    after = coach.normalize_scores(raw)
+    before = ss.evaluation["answers"][no - 1]
+    ss.setdefault("retries", []).append({"no": no, "answer": answer, "after": after, "result": coach.compare(before, after)})
+
+
+def show_compare(r):
+    c = r["result"]
+    c1, c2 = st.columns(2)
+    c1.metric("전", f"{c['before']} / 20")
+    c2.metric("후", f"{c['after']} / 20", delta=c["diff"])
+    st.table([{**row, "차이": f"{row['차이']:+d}"} for row in c["rows"]])
+    st.markdown(f"**아직 약한 점** {r['after']['weak']}")
+
+
+def show_retry(api_key):
+    ev = ss.evaluation
+    order = coach.lowest_first(ev["answers"])
+    if not order:
+        st.info("평가받은 답이 없어요. 📊 평가 탭에서 다시 평가받아 주세요.")
+        return
+    labels = {f"질문 {n} · {ev['answers'][n - 1]['total']}/20 · {ss.transcript[n - 1]['question']}": n for n in order}
+    no = labels[st.selectbox("다시 답할 질문 (점수 낮은 순)", list(labels))]
+    item, before = ss.transcript[no - 1], ev["answers"][no - 1]
+    st.markdown(f"**내가 했던 답** {coach.my_answers(item)}")
+    st.markdown(f"**가장 약한 점** {before['weak']}")
+    if before["show_rewrite"]:
+        with st.expander("고친 답 참고 (그대로 외우지 말고 내 말로)"):
+            st.write(before["rewrite"])
+    answer = st.text_area("다시 답하기", key=f"retry_text_{no}", height=140)
+    if st.button("다시 채점받기", type="primary"):
+        if not answer.strip():
+            st.warning("새 답을 적고 다시 눌러 주세요.")
+        elif not api_key.strip():
+            st.warning("사이드바에 OpenAI 키를 넣고 다시 눌러 주세요.")
+        else:
+            try:
+                with st.spinner("다시 채점하고 있어요…"):
+                    rescore(api_key.strip(), no, answer.strip())
+            except RuntimeError as e:
+                st.error(str(e))
+
+    mine = [r for r in ss.get("retries", []) if r["no"] == no]
+    for i, r in enumerate(reversed(mine)):
+        if i == 0:
+            st.subheader("전 → 후")
+            show_compare(r)
+        else:
+            with st.expander(f"이전 재도전 {len(mine) - i}회차 · {r['result']['after']}/20"):
+                st.write(r["answer"])
+                show_compare(r)
+
+
 # ───────── 사이드바: 키 · 상태창 ─────────
 with st.sidebar:
     st.header("🎤 AI 면접 코치")
@@ -176,7 +234,7 @@ if "profile" not in ss:
 
 # ───────── 면접 · 평가 탭 ─────────
 st.title("🎤 모의면접")
-tab_interview, tab_eval = st.tabs(["🎤 면접", "📊 평가"])
+tab_interview, tab_eval, tab_retry = st.tabs(["🎤 면접", "📊 평가", "🔁 재도전"])
 
 with tab_interview:
     for m in ss.messages:
@@ -216,3 +274,9 @@ with tab_eval:
                     st.error(str(e))
         if ss.get("evaluation"):
             show_evaluation(ss.evaluation)
+
+with tab_retry:
+    if not ss.get("evaluation"):
+        st.info("📊 평가를 먼저 받으면, 점수 낮은 답부터 다시 답해 볼 수 있어요.")
+    else:
+        show_retry(api_key)

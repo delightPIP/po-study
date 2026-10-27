@@ -47,6 +47,12 @@ EVALUATOR = """너는 모의면접 평가 위원회야. 아래 면접 기록을 
 5. next 에 다음 연습에서 고칠 것 3개.
 출력은 JSON 하나만. 점수 합계는 쓰지 마 (앱이 계산해)."""
 
+# 재채점
+RETRY = """너는 면접 평가자야. 아래 질문에 대한 지원자의 답 하나를 기준 4개(구체성 / 직무 연관 / 구조 / 근거 · 검증)로 각각 0~5점.
+가장 약한 점 하나를 weak 에 1문장. 지원자가 쓰지 않은 사실은 지어내지 마.
+{context}
+출력은 JSON 하나만."""
+
 # strict 스키마: 모든 칸 required, additionalProperties false
 INTERVIEWER_SCHEMA = {
     "type": "object",
@@ -101,5 +107,18 @@ EVAL_SCHEMA = {
         "next": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["panel", "conflict", "agree", "answers", "next"],
+    "additionalProperties": False,
+}
+
+RETRY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "specific": {"type": "integer"},
+        "relevance": {"type": "integer"},
+        "structure": {"type": "integer"},
+        "evidence": {"type": "integer"},
+        "weak": {"type": "string"},
+    },
+    "required": ["specific", "relevance", "structure", "evidence", "weak"],
     "additionalProperties": False,
 }

@@ -115,3 +115,31 @@ def normalize_eval(raw, count):
         "answer_average": round(sum(totals) / len(totals), 1) if totals else 0.0,
         "next": raw["next"][:3],
     }
+
+
+# ───────── 재도전 (STEP 4) ─────────
+def my_answers(item):
+    """그 질문에서 내가 한 답(꼬리 질문 답 포함)을 이어서."""
+    return " / ".join(t["text"] for t in item["turns"] if t["kind"] == "answer")
+
+
+def retry_input(item, answer):
+    return f"[질문] {item['question']}\n[보는 점] {item['point']}\n[지원자 답] {answer}"
+
+
+def normalize_scores(raw):
+    """재채점 결과: 점수 자르기 + 합계 다시 계산."""
+    fixed = {k: clamp(raw[k], 0, 5) for k, _ in CRITERIA}
+    return {**fixed, "total": answer_total(fixed), "weak": raw["weak"]}
+
+
+def lowest_first(answers):
+    """평가받은 답 번호(1부터)를 합계 낮은 순으로."""
+    rated = [(a["total"], a["no"]) for a in answers if a]
+    return [no for _, no in sorted(rated)]
+
+
+def compare(before, after):
+    """전 · 후 합계와 차이, 기준별 전/후."""
+    rows = [{"기준": name, "전": before[k], "후": after[k], "차이": after[k] - before[k]} for k, name in CRITERIA]
+    return {"before": before["total"], "after": after["total"], "diff": after["total"] - before["total"], "rows": rows}
