@@ -1,0 +1,6 @@
+.env
+__pycache__/
+.streamlit/secrets.toml
+
+# 내 실제 경험이 들어간 로컬 전용 파일
+*.local.md
